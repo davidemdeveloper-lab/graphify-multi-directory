@@ -151,9 +151,19 @@ def add_source(
         "label": label or source_id,
         "last_seen": _now(),
     }
-    manifest.setdefault("sources", {})[source_id] = source
+    sources = manifest.setdefault("sources", {})
+    previous_source = sources.get(source_id)
+    sources[source_id] = source
     manifest = save_workspace(manifest)
-    write_pointer(source_path, manifest)
+    try:
+        write_pointer(source_path, manifest)
+    except OSError as exc:
+        if previous_source is None:
+            sources.pop(source_id, None)
+        else:
+            sources[source_id] = previous_source
+        save_workspace(manifest)
+        raise WorkspaceError(f"could not write workspace pointer for source {source_id}: {exc}") from exc
     return manifest
 
 

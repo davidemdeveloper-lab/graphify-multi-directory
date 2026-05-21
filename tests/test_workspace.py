@@ -78,6 +78,26 @@ def test_add_source_stores_generic_source_and_pointer(monkeypatch, tmp_path):
     assert Path(pointer_data["manifest_path"]) == tmp_path / "workspaces" / "knowledge" / "workspace.json"
 
 
+def test_add_source_rolls_back_manifest_when_pointer_write_fails(monkeypatch, tmp_path):
+    from graphify import workspace
+
+    monkeypatch.setattr(workspace, "_WORKSPACES_DIR", tmp_path / "workspaces")
+    source_dir = tmp_path / "docs"
+    source_dir.mkdir()
+
+    def fail_pointer(source_dir: Path, manifest: dict) -> Path:
+        raise PermissionError("read-only source")
+
+    monkeypatch.setattr(workspace, "write_pointer", fail_pointer)
+    workspace.init_workspace("knowledge")
+
+    with pytest.raises(workspace.WorkspaceError, match="could not write workspace pointer"):
+        workspace.add_source("knowledge", "research_docs", source_dir, kind="research")
+
+    manifest = workspace.load_workspace("knowledge")
+    assert "research_docs" not in manifest["sources"]
+
+
 def test_doctor_reports_missing_source_without_searching(monkeypatch, tmp_path):
     from graphify import workspace
 
