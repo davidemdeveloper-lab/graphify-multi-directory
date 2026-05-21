@@ -166,6 +166,28 @@ def test_doctor_reports_source_path_that_is_not_directory(monkeypatch, tmp_path)
     assert status["non_directory_sources"] == [{"id": "api", "path": str(source_file)}]
 
 
+def test_build_reports_source_path_that_is_not_directory(monkeypatch, tmp_path):
+    from graphify import workspace
+
+    monkeypatch.setattr(workspace, "_WORKSPACES_DIR", tmp_path / "workspaces")
+    source_file = tmp_path / "api"
+    source_file.write_text("not a directory", encoding="utf-8")
+
+    manifest = workspace.init_workspace("product")
+    manifest["sources"] = {
+        "api": {
+            "id": "api",
+            "path": str(source_file),
+            "kind": "service",
+            "label": "API",
+        }
+    }
+    workspace.save_workspace(manifest)
+
+    with pytest.raises(workspace.WorkspaceError, match="workspace has non-directory sources"):
+        workspace.build_workspace("product")
+
+
 def test_compose_workspace_graph_prefixes_nodes_and_keeps_source_metadata(tmp_path):
     from graphify.workspace import compose_workspace_graph
 

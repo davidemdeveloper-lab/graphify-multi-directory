@@ -121,6 +121,26 @@ def test_workspace_cli_rejects_invalid_max_workers_without_traceback(tmp_path):
     assert "Traceback" not in result.stderr
 
 
+def test_workspace_cli_shows_workspace_help(tmp_path):
+    env = os.environ.copy()
+
+    result = _run(["workspace", "--help"], tmp_path, env)
+
+    assert result.returncode == 0
+    assert "usage: graphify workspace" in result.stdout
+    assert "add-source" in result.stdout
+
+
+def test_workspace_cli_shows_subcommand_help(tmp_path):
+    env = os.environ.copy()
+
+    result = _run(["workspace", "build", "--help"], tmp_path, env)
+
+    assert result.returncode == 0
+    assert "usage: graphify workspace build" in result.stdout
+    assert "--max-workers" in result.stdout
+
+
 def test_workspace_cli_rejects_unknown_flags_without_ignoring_them(tmp_path):
     env = os.environ.copy()
     env["GRAPHIFY_WORKSPACES_DIR"] = str(tmp_path / "workspaces")

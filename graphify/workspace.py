@@ -520,6 +520,11 @@ def build_workspace(
     if status["missing_sources"]:
         missing = ", ".join(f"{m['id']} ({m['path']})" for m in status["missing_sources"])
         raise WorkspaceError(f"workspace has missing sources: {missing}")
+    if status["non_directory_sources"]:
+        non_directory = ", ".join(
+            f"{m['id']} ({m['path']})" for m in status["non_directory_sources"]
+        )
+        raise WorkspaceError(f"workspace has non-directory sources: {non_directory}")
 
     selected = [source_id] if source_id else list(manifest.get("sources", {}).keys())
     if not selected:
