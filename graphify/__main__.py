@@ -556,6 +556,13 @@ def vscode_uninstall(project_dir: Path | None = None) -> None:
 _ANTIGRAVITY_RULES_PATH = Path(".agents") / "rules" / "graphify.md"
 _ANTIGRAVITY_WORKFLOW_PATH = Path(".agents") / "workflows" / "graphify.md"
 
+_ANTIGRAVITY_MCP_HINT = """To enable full MCP architecture navigation, add this to ~/.gemini/antigravity/mcp_config.json:
+  "graphify": {
+    "command": "uv",
+    "args": ["run", "--with", "graphifyy", "--with", "mcp", "-m", "graphify.serve", "${workspace.path}/graphify-out/graph.json"]
+  }
+For a central workspace graph, replace the final graph path with the output of `graphify workspace path <name>`."""
+
 _ANTIGRAVITY_RULES = """\
 ---
 trigger: always_on
@@ -700,11 +707,7 @@ def _antigravity_install(project_dir: Path) -> None:
     print("Antigravity will now check the knowledge graph before answering")
     print("codebase questions. Run /graphify first to build the graph.")
     print()
-    print("To enable full MCP architecture navigation, add this to ~/.gemini/antigravity/mcp_config.json:")
-    print('  "graphify": {')
-    print('    "command": "uv",')
-    print('    "args": ["run", "--with", "graphifyy", "--with", "mcp", "-m", "graphify.serve", "${workspace.path}/graphify-out/graph.json"]')
-    print('  }')
+    print(_ANTIGRAVITY_MCP_HINT)
 
 
 def _antigravity_uninstall(project_dir: Path) -> None:
@@ -2414,7 +2417,6 @@ def main() -> None:
             print("Usage: graphify global [add|remove|list|path]", file=sys.stderr); sys.exit(1)
 
     elif cmd == "workspace":
-        subcmd = sys.argv[2] if len(sys.argv) > 2 else ""
         from graphify.workspace import (
             WorkspaceError,
             add_source as _workspace_add_source,
@@ -2424,103 +2426,77 @@ def main() -> None:
             load_workspace as _workspace_load,
             print_doctor as _workspace_print_doctor,
         )
+        import argparse as _argparse
+
+        parser = _argparse.ArgumentParser(prog="graphify workspace")
+        subparsers = parser.add_subparsers(dest="subcmd", required=True)
+
+        init_parser = subparsers.add_parser("init")
+        init_parser.add_argument("name")
+
+        add_parser = subparsers.add_parser("add-source")
+        add_parser.add_argument("name")
+        add_parser.add_argument("source_id")
+        add_parser.add_argument("source_path")
+        add_parser.add_argument("--kind", default="folder")
+        add_parser.add_argument("--label")
+
+        def _add_build_args(p):
+            p.add_argument("name")
+            p.add_argument("--source", dest="source_id")
+            p.add_argument("--backend")
+            p.add_argument("--model")
+            p.add_argument("--google-workspace", action="store_true")
+            p.add_argument("--no-cluster", action="store_true")
+            p.add_argument("--max-workers", type=int)
+
+        _add_build_args(subparsers.add_parser("build"))
+        _add_build_args(subparsers.add_parser("update"))
+
+        doctor_parser = subparsers.add_parser("doctor")
+        doctor_parser.add_argument("name")
+
+        path_parser = subparsers.add_parser("path")
+        path_parser.add_argument("name")
+
+        opts = parser.parse_args(sys.argv[2:])
 
         try:
-            if subcmd == "init":
-                if len(sys.argv) < 4:
-                    print("Usage: graphify workspace init <name>", file=sys.stderr)
-                    sys.exit(1)
-                manifest = _workspace_init(sys.argv[3])
+            if opts.subcmd == "init":
+                manifest = _workspace_init(opts.name)
                 print(f"Workspace '{manifest['name']}' initialized")
                 print(f"Manifest: {manifest['manifest_path']}")
                 print(f"Graph: {manifest['graph_path']}")
-            elif subcmd == "add-source":
-                if len(sys.argv) < 6:
-                    print("Usage: graphify workspace add-source <name> <id> <path> [--kind K] [--label L]", file=sys.stderr)
-                    sys.exit(1)
-                name, source_id, source_path = sys.argv[3], sys.argv[4], sys.argv[5]
-                kind = "folder"
-                label: str | None = None
-                args = sys.argv[6:]
-                i = 0
-                while i < len(args):
-                    if args[i] == "--kind" and i + 1 < len(args):
-                        kind = args[i + 1]; i += 2
-                    elif args[i].startswith("--kind="):
-                        kind = args[i].split("=", 1)[1]; i += 1
-                    elif args[i] == "--label" and i + 1 < len(args):
-                        label = args[i + 1]; i += 2
-                    elif args[i].startswith("--label="):
-                        label = args[i].split("=", 1)[1]; i += 1
-                    else:
-                        i += 1
-                manifest = _workspace_add_source(name, source_id, source_path, kind=kind, label=label)
-                source = manifest["sources"][source_id]
-                print(f"Added source '{source_id}' ({source['kind']})")
+            elif opts.subcmd == "add-source":
+                manifest = _workspace_add_source(
+                    opts.name,
+                    opts.source_id,
+                    opts.source_path,
+                    kind=opts.kind,
+                    label=opts.label,
+                )
+                source = manifest["sources"][opts.source_id]
+                print(f"Added source '{opts.source_id}' ({source['kind']})")
                 print(f"Path: {source['path']}")
-            elif subcmd in ("build", "update"):
-                if len(sys.argv) < 4:
-                    print(f"Usage: graphify workspace {subcmd} <name> [--source ID]", file=sys.stderr)
-                    sys.exit(1)
-                name = sys.argv[3]
-                source_id: str | None = None
-                backend: str | None = None
-                model: str | None = None
-                no_cluster = False
-                google_workspace = False
-                max_workers: int | None = None
-                args = sys.argv[4:]
-                i = 0
-                while i < len(args):
-                    if args[i] == "--source" and i + 1 < len(args):
-                        source_id = args[i + 1]; i += 2
-                    elif args[i].startswith("--source="):
-                        source_id = args[i].split("=", 1)[1]; i += 1
-                    elif args[i] == "--backend" and i + 1 < len(args):
-                        backend = args[i + 1]; i += 2
-                    elif args[i].startswith("--backend="):
-                        backend = args[i].split("=", 1)[1]; i += 1
-                    elif args[i] == "--model" and i + 1 < len(args):
-                        model = args[i + 1]; i += 2
-                    elif args[i].startswith("--model="):
-                        model = args[i].split("=", 1)[1]; i += 1
-                    elif args[i] == "--google-workspace":
-                        google_workspace = True; i += 1
-                    elif args[i] == "--no-cluster":
-                        no_cluster = True; i += 1
-                    elif args[i] == "--max-workers" and i + 1 < len(args):
-                        max_workers = int(args[i + 1]); i += 2
-                    elif args[i].startswith("--max-workers="):
-                        max_workers = int(args[i].split("=", 1)[1]); i += 1
-                    else:
-                        i += 1
+            elif opts.subcmd in ("build", "update"):
                 result = _workspace_build(
-                    name,
-                    source_id=source_id,
-                    backend=backend,
-                    model=model,
-                    google_workspace=google_workspace or None,
-                    no_cluster=no_cluster,
-                    max_workers=max_workers,
+                    opts.name,
+                    source_id=opts.source_id,
+                    backend=opts.backend,
+                    model=opts.model,
+                    google_workspace=opts.google_workspace or None,
+                    no_cluster=opts.no_cluster,
+                    max_workers=opts.max_workers,
                 )
                 print(
                     f"Workspace '{result['workspace']}' graph built: "
                     f"{result['node_count']} nodes, {result['edge_count']} edges"
                 )
                 print(f"Graph: {result['graph_path']}")
-            elif subcmd == "doctor":
-                if len(sys.argv) < 4:
-                    print("Usage: graphify workspace doctor <name>", file=sys.stderr)
-                    sys.exit(1)
-                sys.exit(_workspace_print_doctor(_workspace_doctor(sys.argv[3])))
-            elif subcmd == "path":
-                if len(sys.argv) < 4:
-                    print("Usage: graphify workspace path <name>", file=sys.stderr)
-                    sys.exit(1)
-                print(_workspace_load(sys.argv[3])["graph_path"])
-            else:
-                print("Usage: graphify workspace [init|add-source|build|update|doctor|path]", file=sys.stderr)
-                sys.exit(1)
+            elif opts.subcmd == "doctor":
+                sys.exit(_workspace_print_doctor(_workspace_doctor(opts.name)))
+            elif opts.subcmd == "path":
+                print(_workspace_load(opts.name)["graph_path"])
         except WorkspaceError as exc:
             print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)

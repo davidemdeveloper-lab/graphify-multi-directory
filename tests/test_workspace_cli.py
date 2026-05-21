@@ -105,3 +105,30 @@ def test_workspace_build_code_source_writes_central_graph_and_report(tmp_path):
     data = json.loads((out / "graph.json").read_text(encoding="utf-8"))
     node_ids = {node["id"] for node in data["nodes"]}
     assert any(node_id.startswith("api::") for node_id in node_ids)
+
+
+def test_workspace_cli_rejects_invalid_max_workers_without_traceback(tmp_path):
+    env = os.environ.copy()
+    env["GRAPHIFY_WORKSPACES_DIR"] = str(tmp_path / "workspaces")
+
+    init = _run(["workspace", "init", "product"], tmp_path, env)
+    assert init.returncode == 0, init.stderr
+
+    result = _run(["workspace", "build", "product", "--max-workers", "abc"], tmp_path, env)
+
+    assert result.returncode == 2
+    assert "argument --max-workers" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_workspace_cli_rejects_unknown_flags_without_ignoring_them(tmp_path):
+    env = os.environ.copy()
+    env["GRAPHIFY_WORKSPACES_DIR"] = str(tmp_path / "workspaces")
+
+    init = _run(["workspace", "init", "product"], tmp_path, env)
+    assert init.returncode == 0, init.stderr
+
+    result = _run(["workspace", "build", "product", "--bogus"], tmp_path, env)
+
+    assert result.returncode == 2
+    assert "unrecognized arguments: --bogus" in result.stderr

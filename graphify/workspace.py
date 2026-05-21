@@ -160,18 +160,32 @@ def add_source(
 def doctor_workspace(name: str) -> dict[str, Any]:
     manifest = load_workspace(name)
     missing: list[dict[str, str]] = []
+    non_directory: list[dict[str, str]] = []
+    missing_source_graphs: list[dict[str, str]] = []
     for source_id, source in manifest.get("sources", {}).items():
         path = Path(source.get("path", "")).expanduser()
         if not path.exists():
             missing.append({"id": source_id, "path": str(path)})
+        elif not path.is_dir():
+            non_directory.append({"id": source_id, "path": str(path)})
+        source_graph = _source_graph_path(manifest["name"], source_id)
+        if not source_graph.exists():
+            missing_source_graphs.append({"id": source_id, "path": str(source_graph)})
     graph_path = Path(manifest.get("graph_path", ""))
     return {
-        "ok": not missing,
+        "ok": (
+            not missing
+            and not non_directory
+            and graph_path.exists()
+            and not missing_source_graphs
+        ),
         "workspace": manifest["name"],
         "manifest_path": manifest["manifest_path"],
         "graph_path": str(graph_path),
         "graph_exists": graph_path.exists(),
         "missing_sources": missing,
+        "non_directory_sources": non_directory,
+        "missing_source_graphs": missing_source_graphs,
     }
 
 
@@ -557,12 +571,29 @@ def build_workspace(
 
 
 def print_doctor(status: dict[str, Any]) -> int:
-    if status["missing_sources"]:
-        for missing in status["missing_sources"]:
-            print(
-                f"missing source {missing['id']}: {missing['path']}",
-                file=sys.stderr,
-            )
+    has_errors = False
+    for missing in status["missing_sources"]:
+        has_errors = True
+        print(
+            f"missing source {missing['id']}: {missing['path']}",
+            file=sys.stderr,
+        )
+    for source in status.get("non_directory_sources", []):
+        has_errors = True
+        print(
+            f"source is not a directory {source['id']}: {source['path']}",
+            file=sys.stderr,
+        )
+    if not status.get("graph_exists", False):
+        has_errors = True
+        print(f"workspace graph missing: {status['graph_path']}", file=sys.stderr)
+    for source_graph in status.get("missing_source_graphs", []):
+        has_errors = True
+        print(
+            f"source graph missing {source_graph['id']}: {source_graph['path']}",
+            file=sys.stderr,
+        )
+    if has_errors:
         return 1
     print(f"workspace {status['workspace']} ok")
     print(f"graph: {status['graph_path']}")

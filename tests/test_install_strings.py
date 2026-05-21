@@ -130,6 +130,13 @@ def test_every_install_surface_mentions_workspace_pointer():
     )
 
 
+def test_antigravity_mcp_hint_mentions_workspace_path_command():
+    from graphify.__main__ import _ANTIGRAVITY_MCP_HINT
+
+    assert "graphify workspace path <name>" in _ANTIGRAVITY_MCP_HINT
+    assert "graphify-out/graph.json" in _ANTIGRAVITY_MCP_HINT
+
+
 def test_agents_section_does_not_skip_dirty_graph_output():
     assert "Dirty graphify-out/ files are expected" in _AGENTS_MD_SECTION
     assert "not a reason to skip graphify" in _AGENTS_MD_SECTION

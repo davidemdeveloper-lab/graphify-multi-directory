@@ -95,6 +95,57 @@ def test_doctor_reports_missing_source_without_searching(monkeypatch, tmp_path):
     assert status["missing_sources"] == [{"id": "api", "path": str(source_dir.resolve())}]
 
 
+def test_doctor_reports_missing_workspace_outputs(monkeypatch, tmp_path, capsys):
+    from graphify import workspace
+
+    monkeypatch.setattr(workspace, "_WORKSPACES_DIR", tmp_path / "workspaces")
+    source_dir = tmp_path / "api"
+    source_dir.mkdir()
+
+    workspace.init_workspace("product")
+    workspace.add_source("product", "api", source_dir, kind="service")
+
+    status = workspace.doctor_workspace("product")
+    rc = workspace.print_doctor(status)
+    captured = capsys.readouterr()
+
+    assert status["ok"] is False
+    assert status["graph_exists"] is False
+    assert status["missing_source_graphs"] == [
+        {
+            "id": "api",
+            "path": str(tmp_path / "workspaces" / "product" / "sources" / "api" / "graphify-out" / "graph.json"),
+        }
+    ]
+    assert rc == 1
+    assert "workspace graph missing" in captured.err
+    assert "source graph missing api" in captured.err
+
+
+def test_doctor_reports_source_path_that_is_not_directory(monkeypatch, tmp_path):
+    from graphify import workspace
+
+    monkeypatch.setattr(workspace, "_WORKSPACES_DIR", tmp_path / "workspaces")
+    source_file = tmp_path / "api"
+    source_file.write_text("not a directory", encoding="utf-8")
+
+    manifest = workspace.init_workspace("product")
+    manifest["sources"] = {
+        "api": {
+            "id": "api",
+            "path": str(source_file),
+            "kind": "service",
+            "label": "API",
+        }
+    }
+    workspace.save_workspace(manifest)
+
+    status = workspace.doctor_workspace("product")
+
+    assert status["ok"] is False
+    assert status["non_directory_sources"] == [{"id": "api", "path": str(source_file)}]
+
+
 def test_compose_workspace_graph_prefixes_nodes_and_keeps_source_metadata(tmp_path):
     from graphify.workspace import compose_workspace_graph
 
