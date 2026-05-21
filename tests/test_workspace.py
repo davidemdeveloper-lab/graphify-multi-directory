@@ -198,6 +198,82 @@ def test_compose_workspace_graph_prefixes_nodes_and_keeps_source_metadata(tmp_pa
     assert G.edges["source::api", "source::docs"]["relation"] == "documents"
 
 
+def test_compose_workspace_graph_preserves_source_edge_direction(tmp_path):
+    from graphify.export import to_json
+    from graphify.workspace import compose_workspace_graph
+
+    source_graph = tmp_path / "api" / "graph.json"
+    source_graph.parent.mkdir(parents=True)
+    source_graph.write_text(
+        json.dumps(
+            {
+                "directed": False,
+                "multigraph": False,
+                "graph": {},
+                "nodes": [
+                    {"id": "callee", "label": "callee", "file_type": "code", "source_file": "app.py"},
+                    {"id": "caller", "label": "caller", "file_type": "code", "source_file": "app.py"},
+                ],
+                "links": [
+                    {
+                        "source": "caller",
+                        "target": "callee",
+                        "relation": "calls",
+                        "confidence": "EXTRACTED",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = {
+        "name": "product",
+        "manifest_path": str(tmp_path / "workspace.json"),
+        "sources": {
+            "api": {"id": "api", "path": str((tmp_path / "api-src").resolve()), "kind": "service", "label": "API"},
+        },
+        "relations": [],
+    }
+
+    G = compose_workspace_graph(manifest, {"api": source_graph})
+    out = tmp_path / "workspace-graph.json"
+    assert to_json(G, {}, str(out), force=True)
+
+    data = json.loads(out.read_text(encoding="utf-8"))
+    calls = [edge for edge in data["links"] if edge.get("relation") == "calls"]
+    assert len(calls) == 1
+    assert calls[0]["source"] == "api::caller"
+    assert calls[0]["target"] == "api::callee"
+
+
+def test_workspace_build_no_cluster_writes_composable_source_graph(monkeypatch, tmp_path):
+    from graphify import cluster as cluster_mod
+    from graphify import workspace
+
+    monkeypatch.setattr(workspace, "_WORKSPACES_DIR", tmp_path / "workspaces")
+    monkeypatch.setattr(
+        cluster_mod,
+        "cluster",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cluster should not run")),
+    )
+    source_dir = tmp_path / "api"
+    source_dir.mkdir()
+    (source_dir / "app.py").write_text("def hello():\n    return 'ok'\n", encoding="utf-8")
+
+    workspace.init_workspace("product")
+    workspace.add_source("product", "api", source_dir, kind="service")
+
+    result = workspace.build_workspace("product", no_cluster=True)
+
+    assert result["node_count"] > 0
+    source_graph = tmp_path / "workspaces" / "product" / "sources" / "api" / "graphify-out" / "graph.json"
+    data = json.loads(source_graph.read_text(encoding="utf-8"))
+    assert "links" in data
+    assert "edges" not in data
+    graph = workspace.compose_workspace_graph(workspace.load_workspace("product"), {"api": source_graph})
+    assert graph.number_of_nodes() > 0
+
+
 def test_workspace_allows_local_ollama_without_api_key(monkeypatch):
     from graphify import workspace
 

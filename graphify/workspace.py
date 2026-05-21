@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 import networkx as nx
-from networkx.readwrite import json_graph
 
 
 _WORKSPACES_DIR = Path(
@@ -235,12 +234,27 @@ def resolve_workspace_graph_path(start: Path | None = None) -> Path | None:
 
 def _load_graph(path: Path) -> nx.Graph:
     data = json.loads(path.read_text(encoding="utf-8"))
-    if "links" not in data and "edges" in data:
-        data = dict(data, links=data["edges"])
-    try:
-        return json_graph.node_link_graph(data, edges="links")
-    except TypeError:
-        return json_graph.node_link_graph(data)
+    links = data.get("links", data.get("edges"))
+    nodes = data.get("nodes")
+    if not isinstance(nodes, list) or not isinstance(links, list):
+        raise WorkspaceError(f"source graph is not node-link JSON: {path}")
+
+    graph = nx.Graph()
+    for node in nodes:
+        if not isinstance(node, dict) or "id" not in node:
+            raise WorkspaceError(f"source graph has invalid node in {path}")
+        graph.add_node(node["id"], **{k: v for k, v in node.items() if k != "id"})
+    for edge in links:
+        if not isinstance(edge, dict) or "source" not in edge or "target" not in edge:
+            raise WorkspaceError(f"source graph has invalid edge in {path}")
+        src = edge["source"]
+        tgt = edge["target"]
+        attrs = {k: v for k, v in edge.items() if k not in ("source", "target")}
+        attrs["_src"] = src
+        attrs["_tgt"] = tgt
+        graph.add_edge(src, tgt, **attrs)
+    graph.graph["hyperedges"] = data.get("hyperedges", [])
+    return graph
 
 
 def _prefix_graph_for_source(G: nx.Graph, manifest: dict[str, Any], source_id: str) -> nx.Graph:
@@ -303,6 +317,8 @@ def compose_workspace_graph(
             source_location=None,
             context="workspace",
             weight=1.0,
+            _src=workspace_node,
+            _tgt=source_node,
         )
         graph_path = Path(source_graph_paths[source_id])
         if not graph_path.exists():
@@ -324,6 +340,8 @@ def compose_workspace_graph(
             context="workspace",
             description=relation.get("description", ""),
             weight=relation.get("weight", 1.0),
+            _src=src,
+            _tgt=tgt,
         )
     return G
 
@@ -441,11 +459,11 @@ def _extract_source_graph(
 
     graph_path = graphify_out / "graph.json"
     tokens = {"input": merged["input_tokens"], "output": merged["output_tokens"]}
+    graph = build([merged], dedup=True, root=source_path)
     if no_cluster:
-        graph_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+        to_json(graph, {}, str(graph_path), force=True)
         return graph_path, detection, tokens
 
-    graph = build([merged], dedup=True, root=source_path)
     communities = cluster(graph)
     cohesion = score_all(graph, communities)
     gods = god_nodes(graph)
@@ -533,6 +551,34 @@ def build_workspace(
     manifest = save_workspace(manifest)
     detections, token_totals = collect_workspace_report_inputs(manifest)
     graph = compose_workspace_graph(manifest, source_graphs)
+    graph_path = Path(manifest["graph_path"])
+    graph_path.parent.mkdir(parents=True, exist_ok=True)
+    if no_cluster:
+        to_json(graph, {}, str(graph_path), force=True)
+        analysis_path = graph_path.parent / ".graphify_analysis.json"
+        analysis_path.write_text(
+            json.dumps(
+                {
+                    "communities": {},
+                    "cohesion": {},
+                    "gods": [],
+                    "surprises": [],
+                    "tokens": token_totals,
+                    "workspace": manifest["name"],
+                    "no_cluster": True,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return {
+            "workspace": manifest["name"],
+            "graph_path": graph_path,
+            "node_count": graph.number_of_nodes(),
+            "edge_count": graph.number_of_edges(),
+            "sources": list(source_graphs),
+        }
+
     communities = cluster(graph)
     cohesion = score_all(graph, communities)
     gods = god_nodes(graph)
@@ -540,8 +586,6 @@ def build_workspace(
     labels = {cid: f"Community {cid}" for cid in communities}
     questions = suggest_questions(graph, communities, labels)
 
-    graph_path = Path(manifest["graph_path"])
-    graph_path.parent.mkdir(parents=True, exist_ok=True)
     to_json(graph, communities, str(graph_path), force=True)
     analysis_path = graph_path.parent / ".graphify_analysis.json"
     analysis_path.write_text(
