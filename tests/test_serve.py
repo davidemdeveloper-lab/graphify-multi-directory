@@ -6,6 +6,7 @@ from networkx.readwrite import json_graph
 
 from graphify.serve import (
     _communities_from_graph,
+    _default_graph_path,
     _score_nodes,
     _compute_idf,
     _pick_seeds,
@@ -182,6 +183,37 @@ def test_query_graph_text_heuristic_context_filter_changes_traversal():
     assert "build" not in text
 
 
+def test_query_graph_text_preserves_edge_direction_from_reverse_seed():
+    G = nx.DiGraph()
+    G.add_node("caller", label="Caller", source_file="app.py", source_location="L1", community=0)
+    G.add_node("callee", label="Callee", source_file="app.py", source_location="L2", community=0)
+    G.add_edge("caller", "callee", relation="calls", confidence="EXTRACTED", context="call")
+
+    text = _query_graph_text(G, "Callee", mode="bfs", depth=1, token_budget=2000)
+
+    assert "EDGE Caller --calls [EXTRACTED context=call]--> Callee" in text
+
+
+def test_subgraph_to_text_includes_workspace_source_metadata():
+    G = nx.Graph()
+    G.add_node(
+        "docs::guide",
+        label="Guide",
+        source_file="guide.md",
+        source_location="",
+        community=0,
+        workspace="product",
+        source_id="docs",
+        source_kind="docs",
+    )
+
+    text = _subgraph_to_text(G, {"docs::guide"}, [])
+
+    assert "workspace=product" in text
+    assert "source=docs" in text
+    assert "kind=docs" in text
+
+
 # --- _load_graph ---
 
 def test_load_graph_roundtrip(tmp_path):
@@ -198,6 +230,29 @@ def test_load_graph_missing_file(tmp_path):
     graphify_dir.mkdir()
     with pytest.raises(SystemExit):
         _load_graph(str(graphify_dir / "nonexistent.json"))
+
+
+def test_default_graph_path_resolves_workspace_pointer(monkeypatch, tmp_path):
+    env_graphify_out = "GRAPHIFY_OUT"
+    monkeypatch.delenv(env_graphify_out, raising=False)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    graph_path = tmp_path / "workspaces" / "product" / "graphify-out" / "graph.json"
+    pointer_dir = repo / ".graphify"
+    pointer_dir.mkdir()
+    (pointer_dir / "workspace.json").write_text(
+        json.dumps(
+            {
+                "workspace": "product",
+                "manifest_path": str(tmp_path / "workspaces" / "product" / "workspace.json"),
+                "graph_path": str(graph_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(repo)
+
+    assert _default_graph_path() == graph_path
 
 
 # --- #874: MCP hot-reload ---

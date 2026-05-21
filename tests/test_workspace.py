@@ -98,6 +98,62 @@ def test_add_source_rolls_back_manifest_when_pointer_write_fails(monkeypatch, tm
     assert "research_docs" not in manifest["sources"]
 
 
+def test_workspace_add_list_and_remove_manual_relation(monkeypatch, tmp_path):
+    from graphify import workspace
+
+    monkeypatch.setattr(workspace, "_WORKSPACES_DIR", tmp_path / "workspaces")
+    api = tmp_path / "api"
+    docs = tmp_path / "docs"
+    api.mkdir()
+    docs.mkdir()
+
+    workspace.init_workspace("product")
+    workspace.add_source("product", "api", api, kind="service")
+    workspace.add_source("product", "docs", docs, kind="docs")
+
+    manifest = workspace.add_relation(
+        "product",
+        "api",
+        "docs",
+        relation="documents",
+        confidence="inferred",
+        confidence_score=0.8,
+        description="API behavior is documented by docs",
+    )
+
+    assert manifest["relations"] == [
+        {
+            "source": "api",
+            "target": "docs",
+            "relation": "documents",
+            "confidence": "INFERRED",
+            "confidence_score": 0.8,
+            "weight": 1.0,
+            "description": "API behavior is documented by docs",
+        }
+    ]
+    assert workspace.list_relations("product") == manifest["relations"]
+
+    manifest, removed = workspace.remove_relation("product", "api", "docs", relation="documents")
+
+    assert removed == 1
+    assert manifest["relations"] == []
+
+
+def test_workspace_add_relation_rejects_unknown_sources(monkeypatch, tmp_path):
+    from graphify import workspace
+
+    monkeypatch.setattr(workspace, "_WORKSPACES_DIR", tmp_path / "workspaces")
+    api = tmp_path / "api"
+    api.mkdir()
+
+    workspace.init_workspace("product")
+    workspace.add_source("product", "api", api, kind="service")
+
+    with pytest.raises(workspace.WorkspaceError, match="source not found in workspace: docs"):
+        workspace.add_relation("product", "api", "docs", relation="documents")
+
+
 def test_doctor_reports_missing_source_without_searching(monkeypatch, tmp_path):
     from graphify import workspace
 
@@ -113,6 +169,79 @@ def test_doctor_reports_missing_source_without_searching(monkeypatch, tmp_path):
 
     assert status["ok"] is False
     assert status["missing_sources"] == [{"id": "api", "path": str(source_dir.resolve())}]
+
+
+def test_doctor_reports_invalid_manual_relations(monkeypatch, tmp_path, capsys):
+    from graphify import workspace
+
+    monkeypatch.setattr(workspace, "_WORKSPACES_DIR", tmp_path / "workspaces")
+    api = tmp_path / "api"
+    api.mkdir()
+
+    manifest = workspace.init_workspace("product")
+    manifest["sources"] = {
+        "api": {
+            "id": "api",
+            "path": str(api),
+            "kind": "service",
+            "label": "API",
+        }
+    }
+    manifest["relations"] = [
+        {
+            "source": "api",
+            "target": "docs",
+            "relation": "documents",
+            "confidence": "EXTRACTED",
+        }
+    ]
+    workspace.save_workspace(manifest)
+
+    status = workspace.doctor_workspace("product")
+    rc = workspace.print_doctor(status)
+    captured = capsys.readouterr()
+
+    assert status["ok"] is False
+    assert status["invalid_relations"] == [
+        {
+            "index": "0",
+            "source": "api",
+            "target": "docs",
+            "problem": "missing target 'docs'",
+        }
+    ]
+    assert rc == 1
+    assert "invalid relation #0 api->docs" in captured.err
+
+
+def test_build_rejects_invalid_manual_relations(monkeypatch, tmp_path):
+    from graphify import workspace
+
+    monkeypatch.setattr(workspace, "_WORKSPACES_DIR", tmp_path / "workspaces")
+    api = tmp_path / "api"
+    api.mkdir()
+
+    manifest = workspace.init_workspace("product")
+    manifest["sources"] = {
+        "api": {
+            "id": "api",
+            "path": str(api),
+            "kind": "service",
+            "label": "API",
+        }
+    }
+    manifest["relations"] = [
+        {
+            "source": "api",
+            "target": "docs",
+            "relation": "documents",
+            "confidence": "EXTRACTED",
+        }
+    ]
+    workspace.save_workspace(manifest)
+
+    with pytest.raises(workspace.WorkspaceError, match="workspace has invalid relations"):
+        workspace.build_workspace("product")
 
 
 def test_doctor_reports_missing_workspace_outputs(monkeypatch, tmp_path, capsys):

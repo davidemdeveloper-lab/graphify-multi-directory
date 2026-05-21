@@ -559,9 +559,10 @@ _ANTIGRAVITY_WORKFLOW_PATH = Path(".agents") / "workflows" / "graphify.md"
 _ANTIGRAVITY_MCP_HINT = """To enable full MCP architecture navigation, add this to ~/.gemini/antigravity/mcp_config.json:
   "graphify": {
     "command": "uv",
-    "args": ["run", "--with", "graphifyy", "--with", "mcp", "-m", "graphify.serve", "${workspace.path}/graphify-out/graph.json"]
+    "args": ["run", "--with", "graphifyy", "--with", "mcp", "-m", "graphify.serve"]
   }
-For a central workspace graph, replace the final graph path with the output of `graphify workspace path <name>`."""
+This auto-resolves `${workspace.path}/.graphify/workspace.json` and otherwise falls back to `${workspace.path}/graphify-out/graph.json`.
+To pin a central workspace graph explicitly, append the output of `graphify workspace path <name>` as the final arg."""
 
 _ANTIGRAVITY_RULES = """\
 ---
@@ -1290,6 +1291,9 @@ def main() -> None:
         print("  global path              print path to the global graph file")
         print("  workspace init <name>    create a multi-source workspace under ~/.graphify/workspaces/")
         print("  workspace add-source <name> <id> <path> [--kind K]  add a local source folder")
+        print("  workspace add-relation <name> <source> <target> [--relation R]  add/update a manual source relation")
+        print("  workspace remove-relation <name> <source> <target> [--relation R]  remove manual source relation(s)")
+        print("  workspace list-relations <name>  list manual source relations")
         print("  workspace build <name>   build one graph from all declared source folders")
         print("  workspace update <name> [--source ID]  rebuild one source and recompose the workspace graph")
         print("  workspace doctor <name>  validate source paths without filesystem discovery")
@@ -1570,6 +1574,9 @@ def main() -> None:
             _raw = _json.loads(gp.read_text(encoding="utf-8"))
             if "links" not in _raw and "edges" in _raw:
                 _raw = dict(_raw, links=_raw["edges"])
+            # Force directed so query text can recover stored source→target
+            # direction from graph.json, including workspace-composed graphs.
+            _raw = {**_raw, "directed": True}
             try:
                 G = json_graph.node_link_graph(_raw, edges="links")
             except TypeError:
@@ -1726,6 +1733,15 @@ def main() -> None:
         print(f"  Type:      {d.get('file_type', '')}")
         print(f"  Community: {d.get('community', '')}")
         print(f"  Degree:    {G.degree(nid)}")
+        if d.get("workspace"):
+            print(f"  Workspace: {d.get('workspace')}")
+        if d.get("source_id"):
+            print(
+                f"  Workspace source: {d.get('source_id')} "
+                f"({d.get('source_kind', 'folder')})"
+            )
+        if d.get("source_path"):
+            print(f"  Source path: {d.get('source_path')}")
         from graphify.build import edge_data
         connections: list[tuple[str, str, dict]] = []  # (direction, neighbor_id, edge_data)
         for nb in G.successors(nid):
@@ -2427,12 +2443,15 @@ def main() -> None:
     elif cmd == "workspace":
         from graphify.workspace import (
             WorkspaceError,
+            add_relation as _workspace_add_relation,
             add_source as _workspace_add_source,
             build_workspace as _workspace_build,
             doctor_workspace as _workspace_doctor,
             init_workspace as _workspace_init,
+            list_relations as _workspace_list_relations,
             load_workspace as _workspace_load,
             print_doctor as _workspace_print_doctor,
+            remove_relation as _workspace_remove_relation,
         )
         import argparse as _argparse
 
@@ -2448,6 +2467,25 @@ def main() -> None:
         add_parser.add_argument("source_path")
         add_parser.add_argument("--kind", default="folder")
         add_parser.add_argument("--label")
+
+        relation_parser = subparsers.add_parser("add-relation")
+        relation_parser.add_argument("name")
+        relation_parser.add_argument("source_id")
+        relation_parser.add_argument("target_id")
+        relation_parser.add_argument("--relation", default="relates_to")
+        relation_parser.add_argument("--confidence", default="EXTRACTED")
+        relation_parser.add_argument("--confidence-score", type=float, default=1.0)
+        relation_parser.add_argument("--weight", type=float, default=1.0)
+        relation_parser.add_argument("--description")
+
+        remove_relation_parser = subparsers.add_parser("remove-relation")
+        remove_relation_parser.add_argument("name")
+        remove_relation_parser.add_argument("source_id")
+        remove_relation_parser.add_argument("target_id")
+        remove_relation_parser.add_argument("--relation")
+
+        list_relations_parser = subparsers.add_parser("list-relations")
+        list_relations_parser.add_argument("name")
 
         def _add_build_args(p):
             p.add_argument("name")
@@ -2486,6 +2524,44 @@ def main() -> None:
                 source = manifest["sources"][opts.source_id]
                 print(f"Added source '{opts.source_id}' ({source['kind']})")
                 print(f"Path: {source['path']}")
+            elif opts.subcmd == "add-relation":
+                manifest = _workspace_add_relation(
+                    opts.name,
+                    opts.source_id,
+                    opts.target_id,
+                    relation=opts.relation,
+                    confidence=opts.confidence,
+                    confidence_score=opts.confidence_score,
+                    description=opts.description,
+                    weight=opts.weight,
+                )
+                relation = manifest["relations"][-1]
+                print(
+                    f"Added relation {relation['source']} "
+                    f"--{relation['relation']}--> {relation['target']}"
+                )
+            elif opts.subcmd == "remove-relation":
+                _, removed = _workspace_remove_relation(
+                    opts.name,
+                    opts.source_id,
+                    opts.target_id,
+                    relation=opts.relation,
+                )
+                print(f"Removed {removed} relation(s)")
+            elif opts.subcmd == "list-relations":
+                relations = _workspace_list_relations(opts.name)
+                if not relations:
+                    print("No relations")
+                for index, relation in enumerate(relations):
+                    if not isinstance(relation, dict):
+                        print(f"#{index}: invalid relation entry")
+                        continue
+                    print(
+                        f"{relation.get('source', '?')} "
+                        f"--{relation.get('relation', 'relates_to')}--> "
+                        f"{relation.get('target', '?')} "
+                        f"[{relation.get('confidence', 'EXTRACTED')}]"
+                    )
             elif opts.subcmd in ("build", "update"):
                 result = _workspace_build(
                     opts.name,

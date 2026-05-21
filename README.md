@@ -300,14 +300,14 @@ graphify-out/cost.json        # local only
 graphify query "show the auth flow"
 graphify query "what connects DigestAuth to Response?" --graph graphify-out/graph.json
 
-# expose the graph as an MCP server (for repeated tool-call access)
-python -m graphify.serve graphify-out/graph.json
+# expose the graph as an MCP server (auto-resolves .graphify/workspace.json if present)
+python -m graphify.serve
 
 # register with Kimi Code:
-kimi mcp add --transport stdio graphify -- python -m graphify.serve graphify-out/graph.json
+kimi mcp add --transport stdio graphify -- python -m graphify.serve
 ```
 
-If the current repo contains `.graphify/workspace.json`, `graphify query`, `graphify path`, and `graphify explain` automatically use the central workspace graph instead of the local `graphify-out/graph.json`.
+If the current repo contains `.graphify/workspace.json`, `graphify query`, `graphify path`, `graphify explain`, and `python -m graphify.serve` automatically use the central workspace graph instead of the local `graphify-out/graph.json`. Pass an explicit graph path when you want to override that default.
 
 The MCP server gives your assistant structured access: `query_graph`, `get_node`, `get_neighbors`, `shortest_path`, `list_prs`, `get_pr_impact`, `triage_prs`.
 
@@ -489,9 +489,11 @@ graphify global path                                  # print path to the global
 graphify workspace init product                       # ~/.graphify/workspaces/product/
 graphify workspace add-source product api ../api --kind service
 graphify workspace add-source product docs ../docs --kind docs
+graphify workspace add-relation product api docs --relation documents
 graphify workspace build product                      # preserves the normal code/docs/PDF/image pipeline per source
 graphify workspace update product --source api         # rebuild one source, then recompose
 graphify workspace doctor product                     # report missing/moved source folders
+graphify workspace list-relations product             # inspect manual source-level edges
 graphify workspace path product                       # central graph.json path
 
 graphify prs                              # PR dashboard: CI, review, worktree, graph impact

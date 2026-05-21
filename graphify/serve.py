@@ -2,12 +2,26 @@
 from __future__ import annotations
 import json
 import math
+import os
 import sys
 from pathlib import Path
 import networkx as nx
 from networkx.readwrite import json_graph
 from graphify.security import sanitize_label
 from graphify.build import edge_data
+
+
+def _default_graph_path() -> Path:
+    if "GRAPHIFY_OUT" not in os.environ:
+        try:
+            from graphify.workspace import resolve_workspace_graph_path
+
+            workspace_graph = resolve_workspace_graph_path(Path.cwd())
+            if workspace_graph is not None:
+                return workspace_graph
+        except Exception:
+            pass
+    return Path(os.environ.get("GRAPHIFY_OUT", "graphify-out")) / "graph.json"
 
 
 def _load_graph(graph_path: str) -> nx.Graph:
@@ -105,6 +119,28 @@ def _score_nodes(G: nx.Graph, terms: list[str]) -> list[tuple[float, str]]:
         if score > 0:
             scored.append((score, nid))
     return sorted(scored, reverse=True)
+
+
+def _adjacent_edges(G: nx.Graph, node: str):
+    """Yield adjacent nodes with the stored edge direction preserved."""
+    seen: set[tuple[str, str]] = set()
+    if G.is_directed():
+        for neighbor in G.successors(node):
+            edge = (node, neighbor)
+            if edge not in seen:
+                seen.add(edge)
+                yield neighbor, edge
+        for neighbor in G.predecessors(node):
+            edge = (neighbor, node)
+            if edge not in seen:
+                seen.add(edge)
+                yield neighbor, edge
+    else:
+        for neighbor in G.neighbors(node):
+            edge = (node, neighbor)
+            if edge not in seen:
+                seen.add(edge)
+                yield neighbor, edge
 
 
 def _pick_seeds(scored: list[tuple[float, str]], max_k: int = 3, gap_ratio: float = 0.2) -> list[str]:
@@ -209,10 +245,10 @@ def _bfs(G: nx.Graph, start_nodes: list[str], depth: int) -> tuple[set[str], lis
             # is the starting node should still be explored).
             if n not in seed_set and G.degree(n) >= hub_threshold:
                 continue
-            for neighbor in G.neighbors(n):
-                if neighbor not in visited:
+            for neighbor, edge in _adjacent_edges(G, n):
+                if neighbor not in visited and neighbor not in next_frontier:
                     next_frontier.add(neighbor)
-                    edges_seen.append((n, neighbor))
+                    edges_seen.append(edge)
         visited.update(next_frontier)
         frontier = next_frontier
     return visited, edges_seen
@@ -237,10 +273,10 @@ def _dfs(G: nx.Graph, start_nodes: list[str], depth: int) -> tuple[set[str], lis
         visited.add(node)
         if node not in seed_set and G.degree(node) >= hub_threshold:
             continue
-        for neighbor in G.neighbors(node):
+        for neighbor, edge in _adjacent_edges(G, node):
             if neighbor not in visited:
                 stack.append((neighbor, d + 1))
-                edges_seen.append((node, neighbor))
+                edges_seen.append(edge)
     return visited, edges_seen
 
 
@@ -262,11 +298,20 @@ def _subgraph_to_text(G: nx.Graph, nodes: set[str], edges: list[tuple], token_bu
         # corpus document can otherwise inject ANSI escapes, fake graphify-out
         # log lines, or prompt-injection markup into the model's context via
         # source_file / source_location / community.
+        meta = [
+            f"src={sanitize_label(str(d.get('source_file', '')))}",
+            f"loc={sanitize_label(str(d.get('source_location', '')))}",
+            f"community={sanitize_label(str(d.get('community', '')))}",
+        ]
+        if d.get("workspace"):
+            meta.append(f"workspace={sanitize_label(str(d.get('workspace')))}")
+        if d.get("source_id"):
+            meta.append(f"source={sanitize_label(str(d.get('source_id')))}")
+        if d.get("source_kind"):
+            meta.append(f"kind={sanitize_label(str(d.get('source_kind')))}")
         line = (
             f"NODE {sanitize_label(d.get('label', nid))} "
-            f"[src={sanitize_label(str(d.get('source_file', '')))} "
-            f"loc={sanitize_label(str(d.get('source_location', '')))} "
-            f"community={sanitize_label(str(d.get('community', '')))}]"
+            f"[{' '.join(meta)}]"
         )
         lines.append(line)
     for u, v in edges:
@@ -378,7 +423,7 @@ def _filter_blank_stdin() -> None:
     sys.stdin = open(0, "r", closefd=False)
 
 
-def serve(graph_path: str = "graphify-out/graph.json") -> None:
+def serve(graph_path: str | None = None) -> None:
     """Start the MCP server. Requires pip install mcp."""
     import threading
 
@@ -390,7 +435,8 @@ def serve(graph_path: str = "graphify-out/graph.json") -> None:
     except ImportError as e:
         raise ImportError("mcp not installed. Run: pip install mcp") from e
 
-    G = _load_graph(graph_path)
+    resolved_graph_path = Path(graph_path).expanduser() if graph_path else _default_graph_path()
+    G = _load_graph(str(resolved_graph_path))
     communities = _communities_from_graph(G)
 
     # Hot-reload state: mtime+size key lets us detect graph.json changes without
@@ -398,7 +444,7 @@ def serve(graph_path: str = "graphify-out/graph.json") -> None:
     # never triggers a redundant reload.
     _reload_lock = threading.Lock()
     try:
-        _s = Path(graph_path).stat()
+        _s = resolved_graph_path.stat()
         _reload_state: dict = {"mtime_ns": _s.st_mtime_ns, "size": _s.st_size}
     except FileNotFoundError:
         _reload_state = {"mtime_ns": 0, "size": -1}
@@ -406,7 +452,7 @@ def serve(graph_path: str = "graphify-out/graph.json") -> None:
     def _maybe_reload() -> None:
         nonlocal G, communities
         try:
-            s = Path(graph_path).stat()
+            s = resolved_graph_path.stat()
             key = (s.st_mtime_ns, s.st_size)
         except FileNotFoundError:
             return
@@ -414,14 +460,14 @@ def serve(graph_path: str = "graphify-out/graph.json") -> None:
             return
         with _reload_lock:
             try:
-                s = Path(graph_path).stat()
+                s = resolved_graph_path.stat()
                 key = (s.st_mtime_ns, s.st_size)
             except FileNotFoundError:
                 return
             if key == (_reload_state["mtime_ns"], _reload_state["size"]):
                 return  # another thread already reloaded
             try:
-                new_G = _load_graph(graph_path)
+                new_G = _load_graph(str(resolved_graph_path))
             except SystemExit:
                 return  # keep serving stale graph on transient read error
             G = new_G
@@ -576,15 +622,25 @@ def serve(graph_path: str = "graphify-out/graph.json") -> None:
         if not matches:
             return f"No node matching '{label}' found."
         nid, d = matches[0]
-        # Sanitise every LLM-derived field before concatenation (F-010).
-        return "\n".join([
+        lines = [
             f"Node: {sanitize_label(d.get('label', nid))}",
             f"  ID: {sanitize_label(nid)}",
             f"  Source: {sanitize_label(str(d.get('source_file', '')))} {sanitize_label(str(d.get('source_location', '')))}",
             f"  Type: {sanitize_label(str(d.get('file_type', '')))}",
             f"  Community: {sanitize_label(str(d.get('community', '')))}",
             f"  Degree: {G.degree(nid)}",
-        ])
+        ]
+        if d.get("workspace"):
+            lines.append(f"  Workspace: {sanitize_label(str(d.get('workspace')))}")
+        if d.get("source_id"):
+            lines.append(
+                f"  Workspace source: {sanitize_label(str(d.get('source_id')))} "
+                f"({sanitize_label(str(d.get('source_kind', 'folder')))})"
+            )
+        if d.get("source_path"):
+            lines.append(f"  Source path: {sanitize_label(str(d.get('source_path')))}")
+        # Sanitise every LLM-derived field before concatenation (F-010).
+        return "\n".join(lines)
 
     def _tool_get_neighbors(arguments: dict) -> str:
         label = arguments["label"].lower()
@@ -639,10 +695,27 @@ def serve(graph_path: str = "graphify-out/graph.json") -> None:
     def _tool_graph_stats(_: dict) -> str:
         confs = [d.get("confidence", "EXTRACTED") for _, _, d in G.edges(data=True)]
         total = len(confs) or 1
+        source_ids = {
+            str(d.get("source_id"))
+            for _, d in G.nodes(data=True)
+            if d.get("source_id")
+        }
+        workspace_ids = {
+            str(d.get("workspace"))
+            for _, d in G.nodes(data=True)
+            if d.get("workspace")
+        }
+        workspace_lines = ""
+        if workspace_ids:
+            workspace_lines = (
+                f"Workspaces: {', '.join(sorted(workspace_ids))}\n"
+                f"Workspace sources: {len(source_ids)}\n"
+            )
         return (
             f"Nodes: {G.number_of_nodes()}\n"
             f"Edges: {G.number_of_edges()}\n"
             f"Communities: {len(communities)}\n"
+            f"{workspace_lines}"
             f"EXTRACTED: {round(confs.count('EXTRACTED')/total*100)}%\n"
             f"INFERRED: {round(confs.count('INFERRED')/total*100)}%\n"
             f"AMBIGUOUS: {round(confs.count('AMBIGUOUS')/total*100)}%\n"
@@ -895,5 +968,5 @@ def serve(graph_path: str = "graphify-out/graph.json") -> None:
 
 
 if __name__ == "__main__":
-    graph_path = sys.argv[1] if len(sys.argv) > 1 else "graphify-out/graph.json"
+    graph_path = sys.argv[1] if len(sys.argv) > 1 else None
     serve(graph_path)

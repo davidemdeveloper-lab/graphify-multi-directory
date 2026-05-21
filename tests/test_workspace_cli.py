@@ -59,6 +59,59 @@ def test_workspace_cli_init_add_source_path_and_doctor(tmp_path):
     assert "missing source api" in doctor.stderr.lower()
 
 
+def test_workspace_cli_add_list_and_remove_relation(tmp_path):
+    env = os.environ.copy()
+    env["GRAPHIFY_WORKSPACES_DIR"] = str(tmp_path / "workspaces")
+    api = tmp_path / "api"
+    docs = tmp_path / "docs"
+    api.mkdir()
+    docs.mkdir()
+
+    assert _run(["workspace", "init", "product"], tmp_path, env).returncode == 0
+    assert _run(["workspace", "add-source", "product", "api", str(api)], tmp_path, env).returncode == 0
+    assert _run(["workspace", "add-source", "product", "docs", str(docs), "--kind", "docs"], tmp_path, env).returncode == 0
+
+    add = _run(
+        [
+            "workspace",
+            "add-relation",
+            "product",
+            "api",
+            "docs",
+            "--relation",
+            "documents",
+            "--confidence",
+            "inferred",
+            "--confidence-score",
+            "0.7",
+            "--description",
+            "API is documented by docs",
+        ],
+        tmp_path,
+        env,
+    )
+
+    assert add.returncode == 0, add.stderr
+    assert "api --documents--> docs" in add.stdout
+
+    listed = _run(["workspace", "list-relations", "product"], tmp_path, env)
+    assert listed.returncode == 0, listed.stderr
+    assert "api --documents--> docs [INFERRED]" in listed.stdout
+
+    removed = _run(
+        ["workspace", "remove-relation", "product", "api", "docs", "--relation", "documents"],
+        tmp_path,
+        env,
+    )
+
+    assert removed.returncode == 0, removed.stderr
+    assert "Removed 1 relation(s)" in removed.stdout
+
+    listed = _run(["workspace", "list-relations", "product"], tmp_path, env)
+    assert listed.returncode == 0, listed.stderr
+    assert "No relations" in listed.stdout
+
+
 def test_query_uses_workspace_pointer_when_no_graph_flag_or_env(tmp_path):
     env = os.environ.copy()
     env.pop("GRAPHIFY_OUT", None)

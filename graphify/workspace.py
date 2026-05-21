@@ -16,6 +16,8 @@ _WORKSPACES_DIR = Path(
 )
 _POINTER_PATH = Path(".graphify") / "workspace.json"
 _VALID_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
+_VALID_RELATION = re.compile(r"^[A-Za-z0-9_.:-]+$")
+_VALID_CONFIDENCE = {"EXTRACTED", "INFERRED", "AMBIGUOUS"}
 
 
 class WorkspaceError(RuntimeError):
@@ -31,6 +33,45 @@ def _validate_id(value: str, label: str) -> str:
     if not value or not _VALID_ID.match(value) or "::" in value or set(value) == {"."}:
         raise WorkspaceError(f"invalid {label}: {value!r}")
     return value
+
+
+def _validate_relation(value: str | None) -> str:
+    relation = (value or "relates_to").strip()
+    if not relation or not _VALID_RELATION.match(relation):
+        raise WorkspaceError(f"invalid relation type: {value!r}")
+    return relation
+
+
+def _validate_confidence(value: str | None) -> str:
+    confidence = (value or "EXTRACTED").strip().upper()
+    if confidence not in _VALID_CONFIDENCE:
+        allowed = ", ".join(sorted(_VALID_CONFIDENCE))
+        raise WorkspaceError(f"invalid relation confidence: {value!r}; expected one of {allowed}")
+    return confidence
+
+
+def _validate_score(value: float | int | str | None, label: str) -> float:
+    if value is None:
+        return 1.0
+    try:
+        score = float(value)
+    except (TypeError, ValueError) as exc:
+        raise WorkspaceError(f"invalid {label}: {value!r}") from exc
+    if score < 0 or score > 1:
+        raise WorkspaceError(f"invalid {label}: {value!r}; expected 0..1")
+    return score
+
+
+def _validate_weight(value: float | int | str | None) -> float:
+    if value is None:
+        return 1.0
+    try:
+        weight = float(value)
+    except (TypeError, ValueError) as exc:
+        raise WorkspaceError(f"invalid weight: {value!r}") from exc
+    if weight < 0:
+        raise WorkspaceError(f"invalid weight: {value!r}; expected a non-negative number")
+    return weight
 
 
 def resolve_semantic_backend(backend: str | None = None) -> str:
@@ -166,11 +207,94 @@ def add_source(
     return manifest
 
 
+def add_relation(
+    name: str,
+    source_id: str,
+    target_id: str,
+    *,
+    relation: str = "relates_to",
+    confidence: str = "EXTRACTED",
+    confidence_score: float | int | str | None = 1.0,
+    description: str | None = None,
+    weight: float | int | str | None = 1.0,
+) -> dict[str, Any]:
+    manifest = load_workspace(name)
+    source_id = _validate_id(source_id, "source id")
+    target_id = _validate_id(target_id, "target source id")
+    sources = manifest.setdefault("sources", {})
+    if source_id not in sources:
+        raise WorkspaceError(f"source not found in workspace: {source_id}")
+    if target_id not in sources:
+        raise WorkspaceError(f"source not found in workspace: {target_id}")
+    if source_id == target_id:
+        raise WorkspaceError("workspace relation endpoints must be different sources")
+
+    relation = _validate_relation(relation)
+    entry: dict[str, Any] = {
+        "source": source_id,
+        "target": target_id,
+        "relation": relation,
+        "confidence": _validate_confidence(confidence),
+        "confidence_score": _validate_score(confidence_score, "confidence_score"),
+        "weight": _validate_weight(weight),
+    }
+    if description:
+        entry["description"] = description
+
+    relations = manifest.setdefault("relations", [])
+    manifest["relations"] = [
+        r
+        for r in relations
+        if not isinstance(r, dict)
+        or not (
+            r.get("source") == source_id
+            and r.get("target") == target_id
+            and r.get("relation", "relates_to") == relation
+        )
+    ]
+    manifest["relations"].append(entry)
+    return save_workspace(manifest)
+
+
+def remove_relation(
+    name: str,
+    source_id: str,
+    target_id: str,
+    *,
+    relation: str | None = None,
+) -> tuple[dict[str, Any], int]:
+    manifest = load_workspace(name)
+    source_id = _validate_id(source_id, "source id")
+    target_id = _validate_id(target_id, "target source id")
+    relation = _validate_relation(relation) if relation else None
+    relations = manifest.setdefault("relations", [])
+    kept = [
+        r
+        for r in relations
+        if not isinstance(r, dict)
+        or not (
+            r.get("source") == source_id
+            and r.get("target") == target_id
+            and (relation is None or r.get("relation", "relates_to") == relation)
+        )
+    ]
+    removed = len(relations) - len(kept)
+    manifest["relations"] = kept
+    return save_workspace(manifest), removed
+
+
+def list_relations(name: str) -> list[dict[str, Any]]:
+    manifest = load_workspace(name)
+    return list(manifest.get("relations", []))
+
+
 def doctor_workspace(name: str) -> dict[str, Any]:
     manifest = load_workspace(name)
     missing: list[dict[str, str]] = []
     non_directory: list[dict[str, str]] = []
     missing_source_graphs: list[dict[str, str]] = []
+    invalid_relations: list[dict[str, str]] = []
+    source_ids = set(manifest.get("sources", {}))
     for source_id, source in manifest.get("sources", {}).items():
         path = Path(source.get("path", "")).expanduser()
         if not path.exists():
@@ -180,6 +304,40 @@ def doctor_workspace(name: str) -> dict[str, Any]:
         source_graph = _source_graph_path(manifest["name"], source_id)
         if not source_graph.exists():
             missing_source_graphs.append({"id": source_id, "path": str(source_graph)})
+    for index, relation in enumerate(manifest.get("relations", [])):
+        if not isinstance(relation, dict):
+            invalid_relations.append(
+                {
+                    "index": str(index),
+                    "source": "",
+                    "target": "",
+                    "problem": "relation entry is not an object",
+                }
+            )
+            continue
+        src = str(relation.get("source", ""))
+        tgt = str(relation.get("target", ""))
+        problems = []
+        if src not in source_ids:
+            problems.append(f"missing source {src!r}")
+        if tgt not in source_ids:
+            problems.append(f"missing target {tgt!r}")
+        try:
+            _validate_relation(str(relation.get("relation", "relates_to")))
+            _validate_confidence(str(relation.get("confidence", "EXTRACTED")))
+            _validate_score(relation.get("confidence_score", 1.0), "confidence_score")
+            _validate_weight(relation.get("weight", 1.0))
+        except WorkspaceError as exc:
+            problems.append(str(exc))
+        if problems:
+            invalid_relations.append(
+                {
+                    "index": str(index),
+                    "source": src,
+                    "target": tgt,
+                    "problem": "; ".join(problems),
+                }
+            )
     graph_path = Path(manifest.get("graph_path", ""))
     return {
         "ok": (
@@ -187,6 +345,7 @@ def doctor_workspace(name: str) -> dict[str, Any]:
             and not non_directory
             and graph_path.exists()
             and not missing_source_graphs
+            and not invalid_relations
         ),
         "workspace": manifest["name"],
         "manifest_path": manifest["manifest_path"],
@@ -195,6 +354,7 @@ def doctor_workspace(name: str) -> dict[str, Any]:
         "missing_sources": missing,
         "non_directory_sources": non_directory,
         "missing_source_graphs": missing_source_graphs,
+        "invalid_relations": invalid_relations,
     }
 
 
@@ -548,6 +708,12 @@ def build_workspace(
             f"{m['id']} ({m['path']})" for m in status["non_directory_sources"]
         )
         raise WorkspaceError(f"workspace has non-directory sources: {non_directory}")
+    if status.get("invalid_relations"):
+        invalid = ", ".join(
+            f"#{r['index']} {r['source']}->{r['target']} ({r['problem']})"
+            for r in status["invalid_relations"]
+        )
+        raise WorkspaceError(f"workspace has invalid relations: {invalid}")
 
     selected = [source_id] if source_id else list(manifest.get("sources", {}).keys())
     if not selected:
@@ -673,6 +839,13 @@ def print_doctor(status: dict[str, Any]) -> int:
         has_errors = True
         print(
             f"source graph missing {source_graph['id']}: {source_graph['path']}",
+            file=sys.stderr,
+        )
+    for relation in status.get("invalid_relations", []):
+        has_errors = True
+        print(
+            f"invalid relation #{relation['index']} "
+            f"{relation['source']}->{relation['target']}: {relation['problem']}",
             file=sys.stderr,
         )
     if has_errors:
