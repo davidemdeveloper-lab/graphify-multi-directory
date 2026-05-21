@@ -268,6 +268,58 @@ def test_compose_workspace_graph_preserves_source_edge_direction(tmp_path):
     assert calls[0]["target"] == "api::callee"
 
 
+def test_compose_workspace_graph_accumulates_and_prefixes_hyperedges(tmp_path):
+    from graphify.export import to_json
+    from graphify.workspace import compose_workspace_graph
+
+    api_graph = tmp_path / "api" / "graph.json"
+    docs_graph = tmp_path / "docs" / "graph.json"
+    for graph_path, label in ((api_graph, "API"), (docs_graph, "Docs")):
+        graph_path.parent.mkdir(parents=True)
+        graph_path.write_text(
+            json.dumps(
+                {
+                    "directed": False,
+                    "multigraph": False,
+                    "graph": {},
+                    "nodes": [
+                        {"id": "shared", "label": label, "file_type": "document", "source_file": f"{label}.md"},
+                    ],
+                    "links": [],
+                    "hyperedges": [
+                        {
+                            "id": "group",
+                            "label": f"{label} group",
+                            "nodes": ["shared"],
+                            "relation": "form",
+                            "confidence": "EXTRACTED",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+    manifest = {
+        "name": "product",
+        "manifest_path": str(tmp_path / "workspace.json"),
+        "sources": {
+            "api": {"id": "api", "path": str((tmp_path / "api-src").resolve()), "kind": "docs", "label": "API"},
+            "docs": {"id": "docs", "path": str((tmp_path / "docs-src").resolve()), "kind": "docs", "label": "Docs"},
+        },
+        "relations": [],
+    }
+
+    G = compose_workspace_graph(manifest, {"api": api_graph, "docs": docs_graph})
+    out = tmp_path / "workspace-graph.json"
+    assert to_json(G, {}, str(out), force=True)
+
+    data = json.loads(out.read_text(encoding="utf-8"))
+    hyperedges = data["hyperedges"]
+    assert {h["id"] for h in hyperedges} == {"api::group", "docs::group"}
+    assert {tuple(h["nodes"]) for h in hyperedges} == {("api::shared",), ("docs::shared",)}
+    assert {h["source_id"] for h in hyperedges} == {"api", "docs"}
+
+
 def test_workspace_build_no_cluster_writes_composable_source_graph(monkeypatch, tmp_path):
     from graphify import cluster as cluster_mod
     from graphify import workspace

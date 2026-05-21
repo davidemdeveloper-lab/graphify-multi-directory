@@ -278,6 +278,23 @@ def _prefix_graph_for_source(G: nx.Graph, manifest: dict[str, Any], source_id: s
             data["_src"] = relabel[data["_src"]]
         if data.get("_tgt") in relabel:
             data["_tgt"] = relabel[data["_tgt"]]
+    hyperedges: list[Any] = []
+    for hyperedge in G.graph.get("hyperedges", []):
+        if not isinstance(hyperedge, dict):
+            hyperedges.append(hyperedge)
+            continue
+        prefixed = dict(hyperedge)
+        if isinstance(prefixed.get("id"), str) and prefixed["id"]:
+            prefixed["id"] = f"{source_id}::{prefixed['id']}"
+        nodes = prefixed.get("nodes")
+        if isinstance(nodes, list):
+            prefixed["nodes"] = [relabel.get(node, node) for node in nodes]
+        prefixed["workspace"] = manifest["name"]
+        prefixed["source_id"] = source_id
+        prefixed["source_kind"] = source.get("kind", "folder")
+        prefixed["source_path"] = source.get("path", "")
+        hyperedges.append(prefixed)
+    H.graph["hyperedges"] = hyperedges
     return H
 
 
@@ -286,6 +303,7 @@ def compose_workspace_graph(
     source_graph_paths: dict[str, str | Path],
 ) -> nx.Graph:
     G = nx.Graph()
+    G.graph["hyperedges"] = []
     workspace_node = f"workspace::{manifest['name']}"
     manifest_file = manifest.get("manifest_path", "")
     G.add_node(
@@ -323,7 +341,12 @@ def compose_workspace_graph(
         graph_path = Path(source_graph_paths[source_id])
         if not graph_path.exists():
             raise WorkspaceError(f"source graph not found for {source_id}: {graph_path}")
-        G = nx.compose(G, _prefix_graph_for_source(_load_graph(graph_path), manifest, source_id))
+        source_graph = _prefix_graph_for_source(_load_graph(graph_path), manifest, source_id)
+        hyperedges = list(G.graph.get("hyperedges", [])) + list(
+            source_graph.graph.get("hyperedges", [])
+        )
+        G = nx.compose(G, source_graph)
+        G.graph["hyperedges"] = hyperedges
     for relation in manifest.get("relations", []):
         src = f"source::{relation.get('source', '')}"
         tgt = f"source::{relation.get('target', '')}"
