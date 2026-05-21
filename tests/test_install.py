@@ -160,6 +160,18 @@ def test_all_skill_files_exist_in_package():
         assert (pkg / name).exists(), f"Missing: {name}"
 
 
+def test_all_skill_files_mention_workspace_pointer():
+    """Every packaged agent skill should explain that graphify commands can use
+    a central workspace graph via .graphify/workspace.json."""
+    import graphify
+    pkg = Path(graphify.__file__).parent
+    missing = []
+    for path in pkg.glob("skill*.md"):
+        if ".graphify/workspace.json" not in path.read_text(encoding="utf-8"):
+            missing.append(path.name)
+    assert not missing
+
+
 def test_claude_install_registers_claude_md(tmp_path):
     """Claude platform install writes CLAUDE.md; others do not."""
     _install(tmp_path, "claude")

@@ -3,6 +3,9 @@
 
 def __getattr__(name):
     # Lazy imports so `graphify install` works before heavy deps are in place.
+    if name == "workspace":
+        import importlib
+        return importlib.import_module("graphify.workspace")
     _map = {
         "extract": ("graphify.extract", "extract"),
         "collect_files": ("graphify.extract", "collect_files"),

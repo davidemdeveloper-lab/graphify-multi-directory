@@ -242,6 +242,9 @@ graphify export callflow-html      # Mermaid architecture/call-flow HTML (auto-r
 
 graphify hook install              # auto-rebuild on git commit
 graphify merge-graphs a.json b.json              # combine two graphs
+graphify workspace init product                  # create a central multi-source workspace
+graphify workspace add-source product api ../api --kind service
+graphify workspace build product                 # build one graph from all declared folders
 
 graphify prs                       # PR dashboard: CI state, review status, worktree mapping
 graphify prs 42                    # deep dive on PR #42 with graph impact
@@ -303,6 +306,8 @@ python -m graphify.serve graphify-out/graph.json
 # register with Kimi Code:
 kimi mcp add --transport stdio graphify -- python -m graphify.serve graphify-out/graph.json
 ```
+
+If the current repo contains `.graphify/workspace.json`, `graphify query`, `graphify path`, and `graphify explain` automatically use the central workspace graph instead of the local `graphify-out/graph.json`.
 
 The MCP server gives your assistant structured access: `query_graph`, `get_node`, `get_neighbors`, `shortest_path`, `list_prs`, `get_pr_impact`, `triage_prs`.
 
@@ -480,6 +485,14 @@ graphify global add graphify-out/graph.json myrepo   # register a project graph 
 graphify global remove myrepo                         # remove a project from the global graph
 graphify global list                                  # show all registered repos + node/edge counts
 graphify global path                                  # print path to the global graph file
+
+graphify workspace init product                       # ~/.graphify/workspaces/product/
+graphify workspace add-source product api ../api --kind service
+graphify workspace add-source product docs ../docs --kind docs
+graphify workspace build product                      # preserves the normal code/docs/PDF/image pipeline per source
+graphify workspace update product --source api         # rebuild one source, then recompose
+graphify workspace doctor product                     # report missing/moved source folders
+graphify workspace path product                       # central graph.json path
 
 graphify prs                              # PR dashboard: CI, review, worktree, graph impact
 graphify prs 42                           # deep dive on PR #42

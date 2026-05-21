@@ -117,6 +117,19 @@ def test_report_is_still_referenced_as_fallback():
     )
 
 
+def test_every_install_surface_mentions_workspace_pointer():
+    """Installed agent guidance must not assume the graph only lives at
+    ./graphify-out. A workspace pointer lets the same central graph be reused
+    across Codex, Claude Code, OpenCode, Antigravity, and other agents."""
+    missing: list[str] = []
+    for name, text in _INSTALL_TEXTS.items():
+        if ".graphify/workspace.json" not in text:
+            missing.append(name)
+    assert not missing, (
+        f"these install surfaces do not mention workspace graph resolution: {missing}"
+    )
+
+
 def test_agents_section_does_not_skip_dirty_graph_output():
     assert "Dirty graphify-out/ files are expected" in _AGENTS_MD_SECTION
     assert "not a reason to skip graphify" in _AGENTS_MD_SECTION

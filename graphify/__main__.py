@@ -20,6 +20,14 @@ _GRAPHIFY_OUT = os.environ.get("GRAPHIFY_OUT", "graphify-out")
 
 
 def _default_graph_path() -> str:
+    if "GRAPHIFY_OUT" not in os.environ:
+        try:
+            from graphify.workspace import resolve_workspace_graph_path
+            workspace_graph = resolve_workspace_graph_path(Path.cwd())
+            if workspace_graph is not None:
+                return str(workspace_graph)
+        except Exception:
+            pass
     return str(Path(_GRAPHIFY_OUT) / "graph.json")
 
 
@@ -61,8 +69,8 @@ _SETTINGS_HOOK = {
                 "print(d.get('tool_input',d).get('command',''))\" 2>/dev/null || true); "
                 "case \"$CMD\" in "
                 r"*grep*|*rg\ *|*ripgrep*|*find\ *|*fd\ *|*ack\ *|*ag\ *) "
-                "  [ -f graphify-out/graph.json ] && "
-                r"""  echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"graphify: knowledge graph at graphify-out/. For focused questions, run `graphify query \"<question>\"` (scoped subgraph, usually much smaller than GRAPH_REPORT.md) instead of grepping raw files. Read GRAPH_REPORT.md only for broad architecture context."}}' """
+                "  { [ -f graphify-out/graph.json ] || [ -f .graphify/workspace.json ]; } && "
+                r"""  echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"graphify: knowledge graph at graphify-out/ or central workspace pointer .graphify/workspace.json. For focused questions, run `graphify query \"<question>\"` (scoped subgraph, usually much smaller than GRAPH_REPORT.md) instead of grepping raw files. Read GRAPH_REPORT.md only for broad architecture context."}}' """
                 "  || true ;; "
                 "esac"
             ),
@@ -290,9 +298,10 @@ _CLAUDE_MD_SECTION = """\
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+If `.graphify/workspace.json` exists, graphify commands resolve the central workspace graph automatically; otherwise they use `graphify-out/`.
 
 Rules:
-- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json or `.graphify/workspace.json` exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
@@ -306,11 +315,12 @@ _AGENTS_MD_SECTION = """\
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+If `.graphify/workspace.json` exists, graphify commands resolve the central workspace graph automatically; otherwise they use `graphify-out/`.
 
 When the user types `/graphify`, invoke the `skill` tool with `skill: "graphify"` before doing anything else.
 
 Rules:
-- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json or `.graphify/workspace.json` exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
 - Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
@@ -323,9 +333,10 @@ _GEMINI_MD_SECTION = """\
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+If `.graphify/workspace.json` exists, graphify commands resolve the central workspace graph automatically; otherwise they use `graphify-out/`.
 
 Rules:
-- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json or `.graphify/workspace.json` exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
@@ -341,9 +352,9 @@ _GEMINI_HOOK = {
             "command": (
                 'python -c "'
                 "import sys,pathlib,json;"
-                "e=pathlib.Path('graphify-out/graph.json').exists();"
+                "e=pathlib.Path('graphify-out/graph.json').exists() or pathlib.Path('.graphify/workspace.json').exists();"
                 "d={'decision':'allow'};"
-                "e and d.update({'additionalContext':'graphify: knowledge graph at graphify-out/. For focused questions, run `graphify query \"<question>\"` (scoped subgraph, usually much smaller than GRAPH_REPORT.md) instead of grepping raw files. Read GRAPH_REPORT.md only for broad architecture context.'});"
+                "e and d.update({'additionalContext':'graphify: knowledge graph at graphify-out/ or central workspace pointer .graphify/workspace.json. For focused questions, run `graphify query \"<question>\"` (scoped subgraph, usually much smaller than GRAPH_REPORT.md) instead of grepping raw files. Read GRAPH_REPORT.md only for broad architecture context.'});"
                 "sys.stdout.write(json.dumps(d))"
                 '"'
             ),
@@ -464,7 +475,7 @@ _VSCODE_INSTRUCTIONS_SECTION = """\
 
 For any question about this repo's architecture, structure, components, or how to add/modify/find
 code, your first action should be `graphify query "<question>"` when `graphify-out/graph.json`
-exists. Use `graphify path "<A>" "<B>"` for relationship questions and `graphify explain "<concept>"`
+or `.graphify/workspace.json` exists. Graphify resolves the central workspace graph automatically from `.graphify/workspace.json`; otherwise it uses `graphify-out/`. Use `graphify path "<A>" "<B>"` for relationship questions and `graphify explain "<concept>"`
 for focused-concept questions. These return a scoped subgraph, usually much smaller than the full
 report or raw grep output.
 
@@ -548,15 +559,16 @@ _ANTIGRAVITY_WORKFLOW_PATH = Path(".agents") / "workflows" / "graphify.md"
 _ANTIGRAVITY_RULES = """\
 ---
 trigger: always_on
-description: Consult the graphify knowledge graph at graphify-out/ for codebase and architecture questions.
+description: Consult the graphify knowledge graph at graphify-out/ or central workspace pointer .graphify/workspace.json for codebase and architecture questions.
 ---
 
 ## graphify
 
 This project has a graphify knowledge graph at graphify-out/.
+If `.graphify/workspace.json` exists, graphify commands resolve the central workspace graph automatically; otherwise they use `graphify-out/`.
 
 Rules:
-- For codebase or architecture questions, when `graphify-out/graph.json` exists, first run `graphify query "<question>"` (CLI) or `query_graph` (MCP). Use `graphify path "<A>" "<B>"` / `shortest_path` for relationships and `graphify explain "<concept>"` / `get_node` for focused concepts. These return a scoped subgraph, usually much smaller than `GRAPH_REPORT.md` or raw grep output.
+- For codebase or architecture questions, when `graphify-out/graph.json` or `.graphify/workspace.json` exists, first run `graphify query "<question>"` (CLI) or `query_graph` (MCP). Use `graphify path "<A>" "<B>"` / `shortest_path` for relationships and `graphify explain "<concept>"` / `get_node` for focused concepts. These return a scoped subgraph, usually much smaller than `GRAPH_REPORT.md` or raw grep output.
 - If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context
 - After modifying code files in this session, run `graphify update .` to keep the graph current (AST-only, no API cost)
@@ -581,8 +593,8 @@ _KIRO_STEERING = """\
 inclusion: always
 ---
 
-graphify: A knowledge graph of this project lives in `graphify-out/`. \
-For codebase, architecture, or dependency questions, when `graphify-out/graph.json` exists, \
+graphify: A knowledge graph of this project lives in `graphify-out/`, or a central workspace graph is pointed to by `.graphify/workspace.json`. \
+For codebase, architecture, or dependency questions, when `graphify-out/graph.json` or `.graphify/workspace.json` exists, \
 first run `graphify query "<question>"` (or `graphify path "<A>" "<B>"` / `graphify explain "<concept>"`). \
 These return a scoped subgraph, usually much smaller than `GRAPH_REPORT.md` or raw grep output. \
 Read `GRAPH_REPORT.md` only for broad architecture review or when those commands do not surface enough context.
@@ -734,8 +746,9 @@ alwaysApply: true
 ---
 
 This project has a graphify knowledge graph at graphify-out/.
+If `.graphify/workspace.json` exists, graphify commands resolve the central workspace graph automatically; otherwise they use `graphify-out/`.
 
-- For codebase or architecture questions, when `graphify-out/graph.json` exists, first run `graphify query "<question>"` (or `graphify path "<A>" "<B>"` / `graphify explain "<concept>"`). These return a scoped subgraph, usually much smaller than `GRAPH_REPORT.md` or raw grep output.
+- For codebase or architecture questions, when `graphify-out/graph.json` or `.graphify/workspace.json` exists, first run `graphify query "<question>"` (or `graphify path "<A>" "<B>"` / `graphify explain "<concept>"`). These return a scoped subgraph, usually much smaller than `GRAPH_REPORT.md` or raw grep output.
 - If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context
 - After modifying code files in this session, run `graphify update .` to keep the graph current (AST-only, no API cost)
@@ -783,11 +796,11 @@ export const GraphifyPlugin = async ({ directory }) => {
   return {
     "tool.execute.before": async (input, output) => {
       if (reminded) return;
-      if (!existsSync(join(directory, "graphify-out", "graph.json"))) return;
+      if (!existsSync(join(directory, "graphify-out", "graph.json")) && !existsSync(join(directory, ".graphify", "workspace.json"))) return;
 
       if (input.tool === "bash") {
         output.args.command =
-          'echo "[graphify] knowledge graph at graphify-out/. For focused questions, run \\`graphify query \\"<question>\\"\\` (scoped subgraph, usually much smaller than GRAPH_REPORT.md) instead of grepping raw files. Read GRAPH_REPORT.md only for broad architecture context." && ' +
+          'echo "[graphify] knowledge graph at graphify-out/ or central workspace pointer .graphify/workspace.json. For focused questions, run \\`graphify query \\"<question>\\"\\` (scoped subgraph, usually much smaller than GRAPH_REPORT.md) instead of grepping raw files. Read GRAPH_REPORT.md only for broad architecture context." && ' +
           output.args.command;
         reminded = true;
       }
@@ -1272,6 +1285,12 @@ def main() -> None:
         print("  global remove <tag>      remove a repo's nodes from the global graph")
         print("  global list              list repos in the global graph")
         print("  global path              print path to the global graph file")
+        print("  workspace init <name>    create a multi-source workspace under ~/.graphify/workspaces/")
+        print("  workspace add-source <name> <id> <path> [--kind K]  add a local source folder")
+        print("  workspace build <name>   build one graph from all declared source folders")
+        print("  workspace update <name> [--source ID]  rebuild one source and recompose the workspace graph")
+        print("  workspace doctor <name>  validate source paths without filesystem discovery")
+        print("  workspace path <name>    print the workspace graph.json path")
         print("  benchmark [graph.json]  measure token reduction vs naive full-corpus approach")
         print("  export callflow-html    emit Mermaid-based architecture/call-flow HTML")
         print("  hook install            install post-commit/post-checkout git hooks (all platforms)")
@@ -2394,6 +2413,118 @@ def main() -> None:
         else:
             print("Usage: graphify global [add|remove|list|path]", file=sys.stderr); sys.exit(1)
 
+    elif cmd == "workspace":
+        subcmd = sys.argv[2] if len(sys.argv) > 2 else ""
+        from graphify.workspace import (
+            WorkspaceError,
+            add_source as _workspace_add_source,
+            build_workspace as _workspace_build,
+            doctor_workspace as _workspace_doctor,
+            init_workspace as _workspace_init,
+            load_workspace as _workspace_load,
+            print_doctor as _workspace_print_doctor,
+        )
+
+        try:
+            if subcmd == "init":
+                if len(sys.argv) < 4:
+                    print("Usage: graphify workspace init <name>", file=sys.stderr)
+                    sys.exit(1)
+                manifest = _workspace_init(sys.argv[3])
+                print(f"Workspace '{manifest['name']}' initialized")
+                print(f"Manifest: {manifest['manifest_path']}")
+                print(f"Graph: {manifest['graph_path']}")
+            elif subcmd == "add-source":
+                if len(sys.argv) < 6:
+                    print("Usage: graphify workspace add-source <name> <id> <path> [--kind K] [--label L]", file=sys.stderr)
+                    sys.exit(1)
+                name, source_id, source_path = sys.argv[3], sys.argv[4], sys.argv[5]
+                kind = "folder"
+                label: str | None = None
+                args = sys.argv[6:]
+                i = 0
+                while i < len(args):
+                    if args[i] == "--kind" and i + 1 < len(args):
+                        kind = args[i + 1]; i += 2
+                    elif args[i].startswith("--kind="):
+                        kind = args[i].split("=", 1)[1]; i += 1
+                    elif args[i] == "--label" and i + 1 < len(args):
+                        label = args[i + 1]; i += 2
+                    elif args[i].startswith("--label="):
+                        label = args[i].split("=", 1)[1]; i += 1
+                    else:
+                        i += 1
+                manifest = _workspace_add_source(name, source_id, source_path, kind=kind, label=label)
+                source = manifest["sources"][source_id]
+                print(f"Added source '{source_id}' ({source['kind']})")
+                print(f"Path: {source['path']}")
+            elif subcmd in ("build", "update"):
+                if len(sys.argv) < 4:
+                    print(f"Usage: graphify workspace {subcmd} <name> [--source ID]", file=sys.stderr)
+                    sys.exit(1)
+                name = sys.argv[3]
+                source_id: str | None = None
+                backend: str | None = None
+                model: str | None = None
+                no_cluster = False
+                google_workspace = False
+                max_workers: int | None = None
+                args = sys.argv[4:]
+                i = 0
+                while i < len(args):
+                    if args[i] == "--source" and i + 1 < len(args):
+                        source_id = args[i + 1]; i += 2
+                    elif args[i].startswith("--source="):
+                        source_id = args[i].split("=", 1)[1]; i += 1
+                    elif args[i] == "--backend" and i + 1 < len(args):
+                        backend = args[i + 1]; i += 2
+                    elif args[i].startswith("--backend="):
+                        backend = args[i].split("=", 1)[1]; i += 1
+                    elif args[i] == "--model" and i + 1 < len(args):
+                        model = args[i + 1]; i += 2
+                    elif args[i].startswith("--model="):
+                        model = args[i].split("=", 1)[1]; i += 1
+                    elif args[i] == "--google-workspace":
+                        google_workspace = True; i += 1
+                    elif args[i] == "--no-cluster":
+                        no_cluster = True; i += 1
+                    elif args[i] == "--max-workers" and i + 1 < len(args):
+                        max_workers = int(args[i + 1]); i += 2
+                    elif args[i].startswith("--max-workers="):
+                        max_workers = int(args[i].split("=", 1)[1]); i += 1
+                    else:
+                        i += 1
+                result = _workspace_build(
+                    name,
+                    source_id=source_id,
+                    backend=backend,
+                    model=model,
+                    google_workspace=google_workspace or None,
+                    no_cluster=no_cluster,
+                    max_workers=max_workers,
+                )
+                print(
+                    f"Workspace '{result['workspace']}' graph built: "
+                    f"{result['node_count']} nodes, {result['edge_count']} edges"
+                )
+                print(f"Graph: {result['graph_path']}")
+            elif subcmd == "doctor":
+                if len(sys.argv) < 4:
+                    print("Usage: graphify workspace doctor <name>", file=sys.stderr)
+                    sys.exit(1)
+                sys.exit(_workspace_print_doctor(_workspace_doctor(sys.argv[3])))
+            elif subcmd == "path":
+                if len(sys.argv) < 4:
+                    print("Usage: graphify workspace path <name>", file=sys.stderr)
+                    sys.exit(1)
+                print(_workspace_load(sys.argv[3])["graph_path"])
+            else:
+                print("Usage: graphify workspace [init|add-source|build|update|doctor|path]", file=sys.stderr)
+                sys.exit(1)
+        except WorkspaceError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
+
     elif cmd == "extract":
         # Headless full-pipeline extraction for CI / scripts (#698).
         # Runs detect -> AST extraction on code -> semantic LLM extraction on
@@ -2521,78 +2652,20 @@ def main() -> None:
             os.environ["GRAPHIFY_MAX_WORKERS"] = str(cli_max_workers)
 
         # Backend resolution. If user did not pass --backend, sniff env.
-        # If backend was explicitly requested, validate its key is present
-        # and surface a clear error early — don't let extract_corpus_parallel
-        # raise mid-run after we've spent time on AST extraction.
+        # If backend was explicitly requested, validate credentials early.
         from graphify.llm import (
-            BACKENDS as _BACKENDS,
-            detect_backend as _detect_backend,
             estimate_cost as _estimate_cost,
             extract_corpus_parallel as _extract_corpus_parallel,
-            _format_backend_env_keys,
-            _get_backend_api_key,
         )
-        if backend is None:
-            backend = _detect_backend()
-            if backend is None:
-                print(
-                    "error: no LLM API key found. Set GEMINI_API_KEY or GOOGLE_API_KEY "
-                    "(gemini), MOONSHOT_API_KEY (kimi), ANTHROPIC_API_KEY (claude), "
-                    "OPENAI_API_KEY (openai), DEEPSEEK_API_KEY (deepseek), "
-                    "or pass --backend.",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-        if backend not in _BACKENDS:
-            print(
-                f"error: unknown backend '{backend}'. "
-                f"Available: {', '.join(sorted(_BACKENDS))}",
-                file=sys.stderr,
-            )
+        from graphify.semantic_backend import (
+            SemanticBackendError as _SemanticBackendError,
+            resolve_semantic_backend as _resolve_semantic_backend,
+        )
+        try:
+            backend = _resolve_semantic_backend(backend)
+        except _SemanticBackendError as exc:
+            print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)
-        if not _get_backend_api_key(backend):
-            # Ollama on a loopback URL ignores auth entirely; don't block
-            # the run just because OLLAMA_API_KEY is unset (issue #792).
-            # extract_files_direct already prints a warning and substitutes
-            # a placeholder key in that case.
-            allow_no_key = False
-            if backend == "ollama":
-                from urllib.parse import urlparse
-                ollama_url = os.environ.get(
-                    "OLLAMA_BASE_URL",
-                    _BACKENDS["ollama"].get("base_url", ""),
-                )
-                try:
-                    host = (urlparse(ollama_url).hostname or "").lower()
-                except Exception:
-                    host = ""
-                allow_no_key = (
-                    host in ("localhost", "127.0.0.1", "::1")
-                    or host.startswith("127.")
-                )
-            elif backend == "bedrock":
-                allow_no_key = bool(
-                    os.environ.get("AWS_PROFILE")
-                    or os.environ.get("AWS_REGION")
-                    or os.environ.get("AWS_DEFAULT_REGION")
-                    or os.environ.get("AWS_ACCESS_KEY_ID")
-                )
-            elif backend == "claude-cli":
-                import shutil as _shutil
-                allow_no_key = _shutil.which("claude") is not None
-                if not allow_no_key:
-                    print(
-                        "error: backend 'claude-cli' requires the `claude` CLI on $PATH "
-                        "(install Claude Code and run `claude` once to authenticate).",
-                        file=sys.stderr,
-                    )
-                    sys.exit(1)
-            if not allow_no_key:
-                print(
-                    f"error: backend '{backend}' requires {_format_backend_env_keys(backend)} to be set.",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
 
         # Resolve output dir. The user-facing contract is "<out>/graphify-out/"
         # so a fresh checkout writes graphify-out/ at the project root, matching

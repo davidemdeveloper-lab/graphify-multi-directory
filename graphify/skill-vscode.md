@@ -7,6 +7,7 @@ trigger: /graphify
 # /graphify
 
 Turn any folder of files into a navigable knowledge graph with community detection, an honest audit trail, and three outputs: interactive HTML, GraphRAG-ready JSON, and a plain-language GRAPH_REPORT.md.
+Graphify also supports central workspace graphs: when `.graphify/workspace.json` exists, `graphify query`, `graphify path`, and `graphify explain` resolve that shared graph automatically.
 
 ## Usage
 
